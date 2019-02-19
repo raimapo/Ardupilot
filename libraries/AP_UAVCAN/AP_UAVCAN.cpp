@@ -35,7 +35,10 @@
 #include <uavcan/equipment/indication/LightsCommand.hpp>
 #include <uavcan/equipment/indication/SingleLightCommand.hpp>
 #include <uavcan/equipment/indication/RGB565.hpp>
-
+//------------------------------------
+#include <uavcan/equipment/camera_gimbal/AngularCommand.hpp>
+#include <uavcan/equipment/camera_gimbal/GEOPOICommand.hpp>
+//-----------------------------------
 #include <AP_Baro/AP_Baro_UAVCAN.h>
 #include <AP_GPS/AP_GPS_UAVCAN.h>
 #include <AP_BattMonitor/AP_BattMonitor_UAVCAN.h>
@@ -95,7 +98,10 @@ const AP_Param::GroupInfo AP_UAVCAN::var_info[] = {
 static uavcan::Publisher<uavcan::equipment::actuator::ArrayCommand>* act_out_array[MAX_NUMBER_OF_CAN_DRIVERS];
 static uavcan::Publisher<uavcan::equipment::esc::RawCommand>* esc_raw[MAX_NUMBER_OF_CAN_DRIVERS];
 static uavcan::Publisher<uavcan::equipment::indication::LightsCommand>* rgb_led[MAX_NUMBER_OF_CAN_DRIVERS];
-
+//---------------------------------------
+static uavcan::Publisher<uavcan::equipment::camera_gimbal::AngularCommand>* mount_angular[MAX_NUMBER_OF_CAN_DRIVERS];
+static uavcan::Publisher<uavcan::equipment::camera_gimbal::GEOPOICommand>* mount_geopoi[MAX_NUMBER_OF_CAN_DRIVERS];
+//--------------------------------------
 AP_UAVCAN::AP_UAVCAN() :
     _node_allocator(
         UAVCAN_NODE_POOL_SIZE, UAVCAN_NODE_POOL_SIZE)
@@ -219,6 +225,18 @@ void AP_UAVCAN::init(uint8_t driver_index, bool enable_filters)
     rgb_led[driver_index]->setPriority(uavcan::TransferPriority::OneHigherThanLowest);
 
     _led_conf.devices_count = 0;
+
+//------------------------
+    mount_angular[driver_index] = new uavcan::Publisher<uavcan::equipment::camera_gimbal::AngularCommand>(*_node);
+    mount_angular[driver_index]->setTxTimeout(uavcan::MonotonicDuration::fromMSec(20));
+    mount_angular[driver_index]->setPriority(uavcan::TransferPriority::MiddleLower);
+
+    mount_geopoi[driver_index] = new uavcan::Publisher<uavcan::equipment::camera_gimbal::GEOPOICommand>(*_node);
+    mount_geopoi[driver_index]->setTxTimeout(uavcan::MonotonicDuration::fromMSec(20));
+    mount_geopoi[driver_index]->setPriority(uavcan::TransferPriority::MiddleLower);
+    _mount_conf.new_data = false;
+    _mount_conf.broadcast_enabled = false;
+//------------------------------
     if (enable_filters) {
         configureCanAcceptanceFilters(*_node);
     }
@@ -287,6 +305,9 @@ void AP_UAVCAN::loop(void)
         }
 
         led_out_send();
+//---------------------
+        mount_out_send();
+//--------------------
     }
 }
 
@@ -468,6 +489,63 @@ bool AP_UAVCAN::led_write(uint8_t led_index, uint8_t red, uint8_t green, uint8_t
     }
 
     return true;
+}
+//--------------------------------------------------------
+void AP_UAVCAN::mount_out_send()
+{
+    if(_mount_conf.broadcast_enabled && _mount_conf.new_data)
+    {
+        WITH_SEMAPHORE(_mount_out_sem);
+        if(_mount_conf.geo_poi_mode) {
+            uavcan::equipment::camera_gimbal::GEOPOICommand geopoi_cmd;
+            geopoi_cmd.longitude_deg_1e7 = _mount_conf.poi.lng;
+            geopoi_cmd.latitude_deg_1e7 = _mount_conf.poi.lat;
+            geopoi_cmd.height_cm = _mount_conf.poi.alt;
+            geopoi_cmd.height_reference = uavcan::equipment::camera_gimbal::GEOPOICommand::HEIGHT_REFERENCE_MEAN_SEA_LEVEL;
+            geopoi_cmd.mode.command_mode = uavcan::equipment::camera_gimbal::Mode::COMMAND_MODE_GEO_POI;
+            mount_geopoi[_driver_index]->broadcast(geopoi_cmd);
+        } else {
+            uavcan::equipment::camera_gimbal::AngularCommand ang_cmd;
+            Quaternion q;
+            q.from_euler(_mount_conf.target_angles.x, _mount_conf.target_angles.y, _mount_conf.target_angles.z);
+            ang_cmd.quaternion_xyzw[0] = q.q2;
+            ang_cmd.quaternion_xyzw[1] = q.q3;
+            ang_cmd.quaternion_xyzw[2] = q.q4;
+            ang_cmd.quaternion_xyzw[3] = q.q1;
+            switch(_mount_conf.control_mode) {
+                case AP_Mount::Control_Angle_Body_Frame:
+                    ang_cmd.mode.command_mode = uavcan::equipment::camera_gimbal::Mode::COMMAND_MODE_ORIENTATION_BODY_FRAME;
+                break;
+
+                case AP_Mount::Control_Angular_Rate:
+                    ang_cmd.mode.command_mode = uavcan::equipment::camera_gimbal::Mode::COMMAND_MODE_ANGULAR_VELOCITY;
+                break;
+
+                case AP_Mount::Control_Angle_Absolute_Frame:
+                    ang_cmd.mode.command_mode = uavcan::equipment::camera_gimbal::Mode::COMMAND_MODE_ORIENTATION_FIXED_FRAME;
+                break;
+
+                default:
+                    ang_cmd.mode.command_mode = uavcan::equipment::camera_gimbal::Mode::COMMAND_MODE_ORIENTATION_FIXED_FRAME;
+                break;
+            }
+            mount_angular[_driver_index]->broadcast(ang_cmd);
+        }
+        _mount_conf.new_data = false;
+    }
+}
+
+void AP_UAVCAN::mount_write(bool geo_poi_mode, Vector3f angles, Location poi, enum AP_Mount::ControlMode mode)
+{
+        WITH_SEMAPHORE(_mount_out_sem);
+
+        _mount_conf.geo_poi_mode = geo_poi_mode;
+        _mount_conf.target_angles = angles;
+        _mount_conf.poi = poi;
+        _mount_conf.control_mode = mode;
+        _mount_conf.broadcast_enabled = true;
+        _mount_conf.new_data = true;
+
 }
 
 #endif // HAL_WITH_UAVCAN

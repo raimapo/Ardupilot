@@ -7,6 +7,9 @@
 #include "AP_Mount_Alexmos.h"
 #include "AP_Mount_SToRM32.h"
 #include "AP_Mount_SToRM32_serial.h"
+#if HAL_WITH_UAVCAN
+#include "AP_Mount_UAVCAN.h"
+#endif
 
 const AP_Param::GroupInfo AP_Mount::var_info[] = {
     // @Param: _DEFLT_MODE
@@ -464,6 +467,16 @@ void AP_Mount::init(const AP_SerialManager& serial_manager)
             _num_instances++;
         }
 
+	#if HAL_WITH_UAVCAN
+        else if (mount_type == Mount_Type_UAVCAN) {
+            _backends[instance] = new AP_Mount_UAVCAN(*this, state[instance], instance);
+            _num_instances++;
+	}
+	#endif
+	
+	
+	
+
         // init new instance
         if (_backends[instance] != nullptr) {
             _backends[instance]->init(serial_manager);
@@ -568,6 +581,9 @@ MAV_RESULT AP_Mount::handle_command_do_mount_configure(const mavlink_command_lon
     state[0]._stab_roll = packet.param2;
     state[0]._stab_tilt = packet.param3;
     state[0]._stab_pan = packet.param4;
+
+    _backends[_primary]->configure((MAV_MOUNT_MODE) packet.param1, (uint8_t) packet.param2, (uint8_t) packet.param3, (uint8_t) packet.param4,
+        (enum ControlMode) packet.param5, (enum ControlMode) packet.param6, (enum ControlMode) packet.param7);
 
     return MAV_RESULT_ACCEPTED;
 }

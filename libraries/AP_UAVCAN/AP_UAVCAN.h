@@ -26,6 +26,8 @@
 #include <uavcan/helpers/heap_based_pool_allocator.hpp>
 #include "AP_UAVCAN_Servers.h"
 
+#include <AP_Mount/AP_Mount.h>
+
 #ifndef UAVCAN_NODE_POOL_SIZE
 #define UAVCAN_NODE_POOL_SIZE 8192
 #endif
@@ -79,8 +81,9 @@ public:
 
     ///// LED /////
     bool led_write(uint8_t led_index, uint8_t red, uint8_t green, uint8_t blue);
-
-
+    //-----------------------------------------------------
+    void mount_write(bool geo_poi_mode, Vector3f angles, Location poi, enum AP_Mount::ControlMode mode);
+    //-----------------------------------------------------
     template <typename DataType_>
     class RegistryBinder {
     protected:
@@ -145,7 +148,9 @@ private:
 
     ///// LED /////
     void led_out_send();
-
+    //------------------------------------
+    void mount_out_send();
+    //------------------------------------
 
     // UAVCAN parameters
     AP_Int8 _uavcan_node;
@@ -188,6 +193,18 @@ private:
     } _led_conf;
 
     HAL_Semaphore _led_out_sem;
+//---------------------------------------------
+    struct {
+        Location poi;
+        Vector3f target_angles;
+        bool geo_poi_mode;
+        bool broadcast_enabled;
+        bool new_data;
+        enum AP_Mount::ControlMode control_mode;
+    } _mount_conf;
+
+    HAL_Semaphore _mount_out_sem;
+//----------------------------------------------
 };
 
 #endif /* AP_UAVCAN_H_ */
